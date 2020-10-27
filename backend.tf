@@ -16,40 +16,11 @@ resource "azurerm_resource_group" "myterraformgroup" {
     }
 }
 
-# Create virtual network
-resource "azurerm_virtual_network" "myterraformnetwork" {
-    name                = "myVnet"
-    address_space       = ["10.0.0.0/16"]
-    location            = "eastus"
-    resource_group_name = azurerm_resource_group.myterraformgroup.name
-
-    tags = {
-        environment = "Terraform Demo"
-    }
+module "apigateway"{
+    source = "./apigateway"
 }
-
-# Create subnet
-resource "azurerm_subnet" "myterraformsubnet" {
-    name                 = "mySubnet"
-    resource_group_name  = azurerm_resource_group.myterraformgroup.name
-    virtual_network_name = azurerm_virtual_network.myterraformnetwork.name
-    address_prefixes       = ["10.0.1.0/24"]
-}
-
-# Create public IPs
-resource "azurerm_public_ip" "myterraformpublicip" {
-    name                         = "myPublicIP"
-    location                     = "eastus"
-    resource_group_name          = azurerm_resource_group.myterraformgroup.name
-    allocation_method            = "Dynamic"
-
-    tags = {
-        environment = "Terraform Demo"
-    }
-}
-
 # Create Network Security Group and rule
-resource "azurerm_network_security_group" "myterraformnsg" {
+resource "azurerm_network_security_group" "backend" {
     name                = "myNetworkSecurityGroup"
     location            = "eastus"
     resource_group_name = azurerm_resource_group.myterraformgroup.name
@@ -71,16 +42,15 @@ resource "azurerm_network_security_group" "myterraformnsg" {
 }
 
 # Create network interface
-resource "azurerm_network_interface" "myterraformnic" {
+resource "azurerm_network_interface" "backend" {
     name                      = "myNIC"
     location                  = "eastus"
     resource_group_name       = azurerm_resource_group.myterraformgroup.name
 
     ip_configuration {
         name                          = "myNicConfiguration"
-        subnet_id                     = azurerm_subnet.myterraformsubnet.id
+        subnet_id                     = var.backend_net.id
         private_ip_address_allocation = "Dynamic"
-        public_ip_address_id          = azurerm_public_ip.myterraformpublicip.id
     }
 
     tags = {
@@ -89,9 +59,9 @@ resource "azurerm_network_interface" "myterraformnic" {
 }
 
 # Connect the security group to the network interface
-resource "azurerm_network_interface_security_group_association" "example" {
-    network_interface_id      = azurerm_network_interface.myterraformnic.id
-    network_security_group_id = azurerm_network_security_group.myterraformnsg.id
+resource "azurerm_network_interface_security_group_association" "backend" {
+    network_interface_id      = azurerm_network_interface.backend.id
+    network_security_group_id = azurerm_network_security_group.backend.id
 }
 # Generate random text for a unique storage account name
 resource "random_id" "randomId" {
@@ -103,13 +73,13 @@ resource "random_id" "randomId" {
     byte_length = 8
 }
 
-resource "azurerm_storage_container" "example" {
+resource "azurerm_storage_container" "backend" {
   name                  = "vhds"
   storage_account_name  = azurerm_storage_account.mystorageaccount.name
   container_access_type = "private"
 }
 # Create storage account for boot diagnostics
-resource "azurerm_storage_account" "mystorageaccount" {
+resource "azurerm_storage_account" "backend" {
     name                        = "diag${random_id.randomId.hex}"
     resource_group_name         = azurerm_resource_group.myterraformgroup.name
     location                    = "eastus"
@@ -127,11 +97,11 @@ resource "tls_private_key" "example_ssh" {
 }
 output "tls_private_key" { value = tls_private_key.example_ssh.private_key_pem }
 # Create virtual machine
-resource "azurerm_virtual_machine" "example" {
+resource "azurerm_virtual_machine" "backend" {
     name                  = "myVM"
     location              = "eastus"
     resource_group_name   = azurerm_resource_group.myterraformgroup.name
-    network_interface_ids = [azurerm_network_interface.myterraformnic.id]
+    network_interface_ids = [azurerm_network_interface.backend.id]
     vm_size                  = "Standard_DS1_v2"
 
     storage_image_reference {
@@ -142,7 +112,7 @@ resource "azurerm_virtual_machine" "example" {
     }
 storage_os_disk {
     name          = "myosdisk1"
-    vhd_uri       = "${azurerm_storage_account.mystorageaccount.primary_blob_endpoint}${azurerm_storage_container.example.name}/myosdisk1.vhd"
+    vhd_uri       = "${azurerm_storage_account.backend.primary_blob_endpoint}${azurerm_storage_container.example.name}/myosdisk1.vhd"
     caching       = "ReadWrite"
     create_option = "FromImage"
   }
@@ -160,4 +130,22 @@ storage_os_disk {
     tags = {
         environment = "Terraform Demo"
     }
+}
+resource "azurerm_virtual_machine_extension" "backend" {
+  name                 = "var.extension_name"
+  virtual_machine_id   = azurerm_virtual_machine.backend.id
+  publisher            = "Microsoft.Azure.Extensions"
+  type                 = "CustomScript"
+  type_handler_version = "2.0"
+
+  settings = <<SETTINGS
+    {
+     "fileUris":["https://testzuowen.blob.core.windows.net/nginx/install_nginx.sh"], "commandToExecute": "sh install_backend.sh" 
+    }
+SETTINGS
+
+
+  tags = {
+    environment = "Production"
+  }
 }
